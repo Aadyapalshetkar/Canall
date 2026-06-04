@@ -1,11 +1,32 @@
 {
   "name": "web",
   "version": "1.0.0",
-  "main": "index.js",
+  "type": "module",
+  "main": "electron/main.cjs",
   "scripts": {
     "dev": "vite",
+    "electron:dev": "concurrently \"npm run dev\" \"wait-on http://localhost:3000 && electron .\"",
     "build": "tsc && vite build",
+    "electron:build": "npm run build && electron-builder",
     "preview": "vite preview"
+  },
+  "build": {
+    "appId": "com.canall.app",
+    "productName": "Canall",
+    "directories": {
+      "output": "dist-electron"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*"
+    ],
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Chat"
+    }
   },
   "keywords": [],
   "author": "",
@@ -24,7 +45,11 @@
     "@types/react": "^19.2.16",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.2",
+    "concurrently": "^9.1.2",
+    "electron": "^41.7.1",
+    "electron-builder": "^26.8.1",
     "typescript": "^6.0.3",
-    "vite": "^8.0.16"
+    "vite": "^8.0.16",
+    "wait-on": "^9.0.10"
   }
 }

@@ -126,11 +126,26 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
     try {
       // 1. Get sender public keys
       let contact = await db.contacts.get(payload.senderId);
+      
       if (!contact) {
-        // In a real app, we'd fetch the key now. For simplicity, assume they exist or fetch them.
-        console.warn('Received message from unknown contact');
-        return;
+        console.log(`Unknown sender ${payload.senderId}. Fetching keys...`);
+        // Request keys from server
+        socketRef.current?.send(JSON.stringify({
+          type: 'FETCH_KEY',
+          payload: { targetUserId: payload.senderId }
+        }));
+        
+        // Wait briefly for the FETCH_KEY_RESPONSE to update the DB
+        // In a production app, we would queue this message processing
+        let attempts = 0;
+        while (!contact && attempts < 10) {
+          await new Promise(r => setTimeout(r, 200));
+          contact = await db.contacts.get(payload.senderId);
+          attempts++;
+        }
       }
+
+      if (!contact) throw new Error('Could not retrieve sender keys');
 
       // 2. Import keys
       const senderEncryptionKey = await cryptoService.current.importPublicKey(contact.publicKey, 'ECDH');

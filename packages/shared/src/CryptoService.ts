@@ -18,10 +18,12 @@ export class CryptoService {
       this.cryptoObject = window.crypto;
       this.crypto = window.crypto.subtle;
     } else {
-      // Node.js environment
-      const { webcrypto } = require('crypto');
-      this.cryptoObject = webcrypto;
-      this.crypto = webcrypto.subtle;
+      // Node.js environment - using a dynamic import or checking global
+      // @ts-ignore
+      const nodeCrypto = globalThis.crypto || (typeof process !== 'undefined' ? require('node:crypto').webcrypto : null);
+      if (!nodeCrypto) throw new Error('Crypto implementation not found');
+      this.cryptoObject = nodeCrypto;
+      this.crypto = nodeCrypto.subtle;
     }
   }
 

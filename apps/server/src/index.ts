@@ -2,13 +2,13 @@ import express from 'express';
 import { WebSocket, WebSocketServer } from 'ws';
 import { createServer } from 'http';
 import { v4 as uuidv4 } from 'uuid';
-import { 
+import type { 
   WSFrame, 
   RegisterPayload, 
   FetchKeyPayload, 
   RoutedMessagePayload, 
   DeliveryAckPayload 
-} from './types';
+} from './types.js';
 
 const app = express();
 const server = createServer(app);
@@ -38,7 +38,7 @@ wss.on('connection', (ws) => {
 
   ws.on('message', (data: string) => {
     try {
-      const frame: WSFrame = JSON.parse(data);
+      const frame: WSFrame = JSON.parse(data.toString());
       
       switch (frame.type) {
         case 'REGISTER':
