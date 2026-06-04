@@ -8,16 +8,15 @@ export class CryptoService {
   private cryptoObject: Crypto;
 
   constructor() {
-    if (typeof window !== 'undefined' && window.crypto) {
-      this.cryptoObject = window.crypto;
-      this.crypto = window.crypto.subtle;
-    } else {
-      // @ts-ignore
-      const nodeCrypto = globalThis.crypto || (typeof process !== 'undefined' ? require('node:crypto').webcrypto : null);
-      if (!nodeCrypto) throw new Error('Crypto implementation not found');
-      this.cryptoObject = nodeCrypto;
-      this.crypto = nodeCrypto.subtle;
+    // Standardize across Browser (window.crypto), Node 20+ (globalThis.crypto), and Mobile (global.crypto)
+    const cryptoInstance = (typeof window !== 'undefined' ? window.crypto : globalThis.crypto);
+    
+    if (!cryptoInstance || !cryptoInstance.subtle) {
+      throw new Error('Web Crypto API (SubtleCrypto) not found in this environment');
     }
+    
+    this.cryptoObject = cryptoInstance;
+    this.crypto = cryptoInstance.subtle;
   }
 
   async generateIdentityKeys() {
