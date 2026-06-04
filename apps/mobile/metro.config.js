@@ -15,14 +15,10 @@ config.resolver.nodeModulesPaths = [
   path.resolve(workspaceRoot, 'node_modules'),
 ];
 
-// 3. Force Metro to resolve 'shared' directly to its source TypeScript files
-// This bypasses the need for the 'dist' folder and ensures correct transpilation
-config.resolver.extraNodeModules = {
-  ...config.resolver.extraNodeModules,
-  shared: path.resolve(workspaceRoot, 'packages/shared/src'),
-};
+// 3. Enable Symlinks (Crucial for monorepos)
+config.resolver.unstable_enableSymlinks = true;
 
 // 4. Ensure we prioritize source files
-config.resolver.sourceExts = [...config.resolver.sourceExts, 'ts', 'tsx'];
+config.resolver.sourceExts = [...config.resolver.sourceExts, 'ts', 'tsx', 'cjs'];
 
 module.exports = config;
