@@ -18,6 +18,7 @@ export class CryptoService {
       this.cryptoObject = window.crypto;
       this.crypto = window.crypto.subtle;
     } else {
+      // Node.js environment
       const { webcrypto } = require('crypto');
       this.cryptoObject = webcrypto;
       this.crypto = webcrypto.subtle;
@@ -39,7 +40,10 @@ export class CryptoService {
       ['sign', 'verify']
     );
 
-    return { encryptionKeys, signingKeys };
+    return { 
+      encryptionKeys: encryptionKeys as CryptoKeyPair, 
+      signingKeys: signingKeys as CryptoKeyPair 
+    };
   }
 
   async generateEphemeralKeys() {
@@ -47,7 +51,7 @@ export class CryptoService {
       { name: 'ECDH', namedCurve: 'P-256' },
       true,
       ['deriveKey']
-    );
+    ) as CryptoKeyPair;
   }
 
   // --- EXPORT/IMPORT ---
@@ -98,7 +102,7 @@ export class CryptoService {
 
     return {
       ciphertext: this.arrayBufferToBase64(ciphertext),
-      iv: this.arrayBufferToBase64(iv)
+      iv: this.arrayBufferToBase64(iv.buffer as ArrayBuffer)
     };
   }
 
@@ -146,10 +150,14 @@ export class CryptoService {
       let binary = '';
       const bytes = new Uint8Array(buffer);
       for (let i = 0; i < bytes.byteLength; i++) {
-        binary += String.fromCharCode(bytes[i]);
+        const byte = bytes[i];
+        if (byte !== undefined) {
+          binary += String.fromCharCode(byte);
+        }
       }
       return btoa(binary);
     } else {
+      // @ts-ignore
       return Buffer.from(buffer).toString('base64');
     }
   }
@@ -163,6 +171,7 @@ export class CryptoService {
       }
       return bytes.buffer;
     } else {
+      // @ts-ignore
       const buf = Buffer.from(base64, 'base64');
       return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
     }

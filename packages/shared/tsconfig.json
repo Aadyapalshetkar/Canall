@@ -42,6 +42,7 @@
     "skipLibCheck": true,
 
     "esModuleInterop": true,
-    "moduleResolution": "node10",
+    "types": ["node"],
+    "moduleResolution": "bundler",
   }
 }
