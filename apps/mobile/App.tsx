@@ -14,7 +14,8 @@ import {
   Clipboard
 } from 'react-native';
 import { Send, UserPlus, Shield, Circle, ChevronLeft, Trash2, Copy, Edit2 } from 'lucide-react-native';
-import { CryptoService, WSFrame, RoutedMessagePayload, FetchKeyResponsePayload } from 'shared';
+import { CryptoService } from './src/shared/CryptoService';
+import { WSFrame, RoutedMessagePayload, FetchKeyResponsePayload } from './src/shared/types';
 import { mobileDb, MobileIdentity, MobileContact } from './src/db/mobileStorage';
 import 'react-native-get-random-values';
 import { v4 as uuidv4 } from 'uuid';
