@@ -6,8 +6,8 @@ export interface WSFrame {
 export interface RegisterPayload {
   userId: string;
   deviceId: string;
-  publicKey: string; 
-  signatureKey: string; 
+  publicKey: string; // ECDH Public
+  signatureKey: string; // ECDSA Public
 }
 
 export interface FetchKeyPayload {
@@ -27,7 +27,7 @@ export interface RoutedMessagePayload {
   timestamp: number;
   ciphertext: string;
   iv: string;
-  ephemeralPublicKey?: string; 
+  ephemeralPublicKey?: string; // For initial handshake / PFS
   signature: string;
 }
 
