@@ -2,8 +2,13 @@ import React, { createContext, useContext, useEffect, useState, useRef } from 'r
 import { v4 as uuidv4 } from 'uuid';
 import { CryptoService, WSFrame, RoutedMessagePayload, FetchKeyResponsePayload } from 'shared';
 import { db, LocalIdentity, Contact, Message } from '../db/schema';
-
 import { useLiveQuery } from 'dexie-react-hooks';
+
+interface SessionIdentity {
+  data: LocalIdentity;
+  encPrivate: CryptoKey;
+  signPrivate: CryptoKey;
+}
 
 interface ChatContextType {
   identity: LocalIdentity | null;
@@ -12,6 +17,9 @@ interface ChatContextType {
   setActiveContact: (contact: Contact | null) => void;
   sendMessage: (content: string) => Promise<void>;
   addContact: (userId: string) => Promise<void>;
+  deleteContact: (userId: string) => Promise<void>;
+  renameContact: (userId: string, name: string) => Promise<void>;
+  resetIdentity: () => Promise<void>;
   isConnected: boolean;
   error: string | null;
   setError: (error: string | null) => void;
@@ -20,7 +28,7 @@ interface ChatContextType {
 const ChatContext = createContext<ChatContextType | undefined>(undefined);
 
 export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [identity, setIdentity] = useState<LocalIdentity | null>(null);
+  const [session, setSession] = useState<SessionIdentity | null>(null);
   const [activeContact, setActiveContact] = useState<Contact | null>(null);
   const [isConnected, setIsConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -34,42 +42,50 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, []);
 
   useEffect(() => {
-    if (identity) {
+    if (session) {
       connectToRelay();
     }
     return () => socketRef.current?.close();
-  }, [identity]);
+  }, [session]);
 
   const initIdentity = async () => {
     const existing = await db.identities.toCollection().first();
     if (existing) {
-      setIdentity(existing);
+      try {
+        const encPrivate = await cryptoService.current.importPrivateKey(existing.encryptionPrivateKeyJWK, 'ECDH');
+        const signPrivate = await cryptoService.current.importPrivateKey(existing.signingPrivateKeyJWK, 'ECDSA');
+        setSession({ data: existing, encPrivate, signPrivate });
+      } catch (err) {
+        console.error('Failed to reload identity keys:', err);
+        setError('Security context corrupted. Please reset identity.');
+      }
     } else {
-      // Create new identity
       const userId = `user_${Math.random().toString(36).substring(7)}`;
       const { encryptionKeys, signingKeys } = await cryptoService.current.generateIdentityKeys();
       
-      const publicKeyBase64 = await cryptoService.current.exportPublicKey(encryptionKeys.publicKey);
-      const signatureKeyBase64 = await cryptoService.current.exportPublicKey(signingKeys.publicKey);
+      const encPrivateJWK = await cryptoService.current.exportPrivateKey(encryptionKeys.privateKey);
+      const encPublicJWK = await cryptoService.current.exportPublicKey(encryptionKeys.publicKey);
+      const signPrivateJWK = await cryptoService.current.exportPrivateKey(signingKeys.privateKey);
+      const signPublicJWK = await cryptoService.current.exportPublicKey(signingKeys.publicKey);
 
       const newIdentity: LocalIdentity = {
         userId,
         deviceId: uuidv4(),
-        encryptionPrivateKey: encryptionKeys.privateKey,
-        encryptionPublicKey: encryptionKeys.publicKey,
-        signingPrivateKey: signingKeys.privateKey,
-        signingPublicKey: signingKeys.publicKey,
-        publicKeyBase64,
-        signatureKeyBase64,
+        encryptionPrivateKeyJWK: encPrivateJWK,
+        encryptionPublicKeyJWK: encPublicJWK,
+        signingPrivateKeyJWK: signPrivateJWK,
+        signingPublicKeyJWK: signPublicJWK,
+        publicKeyBase64: encPublicJWK, // Using JWK as the exchange format now
+        signatureKeyBase64: signPublicJWK,
       };
 
       await db.identities.add(newIdentity);
-      setIdentity(newIdentity);
+      setSession({ data: newIdentity, encPrivate: encryptionKeys.privateKey, signPrivate: signingKeys.privateKey });
     }
   };
 
   const connectToRelay = () => {
-    if (!identity) return;
+    if (!session) return;
 
     const relayUrl = import.meta.env.VITE_RELAY_URL || 'ws://localhost:4000';
     const ws = new WebSocket(relayUrl);
@@ -78,17 +94,15 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
     ws.onopen = () => {
       setIsConnected(true);
       setError(null);
-      // Register with relay
-      const registerFrame: WSFrame = {
+      ws.send(JSON.stringify({
         type: 'REGISTER',
         payload: {
-          userId: identity.userId,
-          deviceId: identity.deviceId,
-          publicKey: identity.publicKeyBase64,
-          signatureKey: identity.signatureKeyBase64,
+          userId: session.data.userId,
+          deviceId: session.data.deviceId,
+          publicKey: session.data.publicKeyBase64,
+          signatureKey: session.data.signatureKeyBase64,
         },
-      };
-      ws.send(JSON.stringify(registerFrame));
+      }));
     };
 
     ws.onmessage = async (event) => {
@@ -98,31 +112,25 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     ws.onclose = () => {
       setIsConnected(false);
-      // Try to reconnect after 3 seconds
       setTimeout(connectToRelay, 3000);
     };
 
-    ws.onerror = () => {
-      setError('Connection failed. Server might be offline.');
-    };
+    ws.onerror = () => setError('Relay offline.');
   };
 
   const handleIncomingFrame = async (frame: WSFrame) => {
     switch (frame.type) {
       case 'FETCH_KEY_RESPONSE':
         const res = frame.payload as FetchKeyResponsePayload;
-        const newContact: Contact = {
+        await db.contacts.put({
           userId: res.targetUserId,
           publicKey: res.publicKey,
           signatureKey: res.signatureKey,
-        };
-        await db.contacts.put(newContact);
+        });
         break;
-
       case 'ROUTED_MESSAGE':
         await handleIncomingMessage(frame.payload);
         break;
-      
       case 'ERROR':
         setError(frame.payload.message);
         break;
@@ -130,88 +138,66 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const handleIncomingMessage = async (payload: RoutedMessagePayload) => {
-    if (!identity) return;
+    if (!session) return;
 
     try {
-      // 1. Get sender public keys
       let contact = await db.contacts.get(payload.senderId);
-      
       if (!contact) {
-        console.log(`Unknown sender ${payload.senderId}. Fetching keys...`);
-        // Request keys from server
-        socketRef.current?.send(JSON.stringify({
-          type: 'FETCH_KEY',
-          payload: { targetUserId: payload.senderId }
-        }));
-        
-        // Wait briefly for the FETCH_KEY_RESPONSE to update the DB
+        socketRef.current?.send(JSON.stringify({ type: 'FETCH_KEY', payload: { targetUserId: payload.senderId } }));
         let attempts = 0;
-        while (!contact && attempts < 10) {
+        while (!contact && attempts < 20) {
           await new Promise(r => setTimeout(r, 200));
           contact = await db.contacts.get(payload.senderId);
           attempts++;
         }
       }
+      if (!contact) throw new Error('Key fetch timeout');
 
-      if (!contact) throw new Error('Could not retrieve sender keys');
+      const senderEncKey = await cryptoService.current.importPublicKey(contact.publicKey, 'ECDH');
+      const senderSignKey = await cryptoService.current.importPublicKey(contact.signatureKey, 'ECDSA');
 
-      // 2. Import keys
-      const senderEncryptionKey = await cryptoService.current.importPublicKey(contact.publicKey, 'ECDH');
-      const senderSigningKey = await cryptoService.current.importPublicKey(contact.signatureKey, 'ECDSA');
+      // 1. Verify Signature
+      const isSigned = await cryptoService.current.verify(payload.ciphertext, payload.signature, senderSignKey);
+      if (!isSigned) throw new Error('BAD_SIGNATURE');
 
-      // 3. Verify Signature
-      const isValid = await cryptoService.current.verify(payload.ciphertext, payload.signature, senderSigningKey);
-      if (!isValid) throw new Error('Signature verification failed');
-
-      // 4. Derive Session Key
-      const sessionKey = await cryptoService.current.deriveSessionKey(identity.encryptionPrivateKey, senderEncryptionKey);
-
-      // 5. Decrypt
+      // 2. Decrypt
+      const sessionKey = await cryptoService.current.deriveSessionKey(session.encPrivate, senderEncKey);
       const plaintext = await cryptoService.current.decrypt(payload.ciphertext, payload.iv, sessionKey);
 
-      // 6. Save to DB
-      const newMessage: Message = {
+      await db.messages.add({
         id: payload.id,
         senderId: payload.senderId,
-        targetUserId: identity.userId,
+        targetUserId: session.data.userId,
         timestamp: payload.timestamp,
         content: plaintext,
         isMe: false,
         status: 'delivered',
-      };
-      await db.messages.add(newMessage);
+      });
 
-      // 7. Send ACK
-      socketRef.current?.send(JSON.stringify({
-        type: 'DELIVERY_ACK',
-        payload: { messageId: payload.id, recipientId: identity.userId }
-      }));
-    } catch (err) {
-      console.error('Failed to handle incoming message:', err);
+      socketRef.current?.send(JSON.stringify({ type: 'DELIVERY_ACK', payload: { messageId: payload.id, recipientId: session.data.userId } }));
+    } catch (err: any) {
+      console.error('Decryption fail:', err);
+      if (err.message === 'BAD_SIGNATURE') {
+        setError(`Security: Verification failed for ${payload.senderId}`);
+      } else {
+        setError(`Security: Decryption failed. Key mismatch?`);
+      }
     }
   };
 
   const sendMessage = async (content: string) => {
-    if (!identity || !activeContact || !socketRef.current) return;
+    if (!session || !activeContact || !socketRef.current) return;
 
     try {
-      // 1. Import target public keys
-      const targetEncryptionKey = await cryptoService.current.importPublicKey(activeContact.publicKey, 'ECDH');
-
-      // 2. Derive Session Key
-      const sessionKey = await cryptoService.current.deriveSessionKey(identity.encryptionPrivateKey, targetEncryptionKey);
-
-      // 3. Encrypt
+      const targetEncKey = await cryptoService.current.importPublicKey(activeContact.publicKey, 'ECDH');
+      const sessionKey = await cryptoService.current.deriveSessionKey(session.encPrivate, targetEncKey);
       const { ciphertext, iv } = await cryptoService.current.encrypt(content, sessionKey);
+      const signature = await cryptoService.current.sign(ciphertext, session.signPrivate);
 
-      // 4. Sign
-      const signature = await cryptoService.current.sign(ciphertext, identity.signingPrivateKey);
-
-      // 5. Build Payload
       const messageId = uuidv4();
       const payload: RoutedMessagePayload = {
         id: messageId,
-        senderId: identity.userId,
+        senderId: session.data.userId,
         targetUserId: activeContact.userId,
         timestamp: Date.now(),
         ciphertext,
@@ -219,13 +205,10 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
         signature,
       };
 
-      // 6. Send
       socketRef.current.send(JSON.stringify({ type: 'ROUTED_MESSAGE', payload }));
-
-      // 7. Save locally
       await db.messages.add({
         id: messageId,
-        senderId: identity.userId,
+        senderId: session.data.userId,
         targetUserId: activeContact.userId,
         timestamp: payload.timestamp,
         content,
@@ -233,27 +216,48 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
         status: 'pending',
       });
     } catch (err) {
-      console.error('Failed to send message:', err);
+      console.error('Send fail:', err);
+      setError('Failed to encrypt message.');
     }
   };
 
   const addContact = async (userId: string) => {
     if (!socketRef.current) return;
     setError(null);
-    socketRef.current.send(JSON.stringify({
-      type: 'FETCH_KEY',
-      payload: { targetUserId: userId.trim() }
-    }));
+    socketRef.current.send(JSON.stringify({ type: 'FETCH_KEY', payload: { targetUserId: userId.trim() } }));
+  };
+
+  const deleteContact = async (userId: string) => {
+    await db.contacts.delete(userId);
+    await db.messages.where('senderId').equals(userId).or('targetUserId').equals(userId).delete();
+    if (activeContact?.userId === userId) setActiveContact(null);
+  };
+
+  const renameContact = async (userId: string, name: string) => {
+    await db.contacts.update(userId, { nickname: name });
+    if (activeContact?.userId === userId) {
+      setActiveContact({ ...activeContact, nickname: name });
+    }
+  };
+
+  const resetIdentity = async () => {
+    await db.identities.clear();
+    await db.contacts.clear();
+    await db.messages.clear();
+    window.location.reload();
   };
 
   return (
     <ChatContext.Provider value={{ 
-      identity, 
+      identity: session?.data || null, 
       contacts, 
       activeContact, 
       setActiveContact, 
       sendMessage, 
       addContact,
+      deleteContact,
+      renameContact,
+      resetIdentity,
       isConnected,
       error,
       setError

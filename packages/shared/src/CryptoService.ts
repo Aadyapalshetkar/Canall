@@ -1,12 +1,6 @@
 /**
  * Canall CryptoService
- * Uses standard Web Crypto API (SubtleCrypto)
- * 
- * Algorithm Choices:
- * - Key Exchange: ECDH (P-256)
- * - Signatures: ECDSA (P-256)
- * - Message Encryption: AES-GCM (256-bit)
- * - Key Derivation: HKDF (SHA-256)
+ * High-compatibility implementation for cross-platform E2EE.
  */
 
 export class CryptoService {
@@ -18,7 +12,6 @@ export class CryptoService {
       this.cryptoObject = window.crypto;
       this.crypto = window.crypto.subtle;
     } else {
-      // Node.js environment - using a dynamic import or checking global
       // @ts-ignore
       const nodeCrypto = globalThis.crypto || (typeof process !== 'undefined' ? require('node:crypto').webcrypto : null);
       if (!nodeCrypto) throw new Error('Crypto implementation not found');
@@ -27,13 +20,11 @@ export class CryptoService {
     }
   }
 
-  // --- KEY GENERATION ---
-
   async generateIdentityKeys() {
     const encryptionKeys = await this.crypto.generateKey(
       { name: 'ECDH', namedCurve: 'P-256' },
       true, 
-      ['deriveKey']
+      ['deriveKey', 'deriveBits']
     );
 
     const signingKeys = await this.crypto.generateKey(
@@ -48,49 +39,74 @@ export class CryptoService {
     };
   }
 
-  async generateEphemeralKeys() {
-    return await this.crypto.generateKey(
-      { name: 'ECDH', namedCurve: 'P-256' },
-      true,
-      ['deriveKey']
-    ) as CryptoKeyPair;
-  }
-
-  // --- EXPORT/IMPORT ---
-
   async exportPublicKey(key: CryptoKey): Promise<string> {
-    const exported = await this.crypto.exportKey('spki', key);
-    return this.arrayBufferToBase64(exported);
+    const exported = await this.crypto.exportKey('jwk', key);
+    return JSON.stringify(exported);
   }
 
-  async importPublicKey(base64Key: string, type: 'ECDH' | 'ECDSA'): Promise<CryptoKey> {
-    const buffer = this.base64ToArrayBuffer(base64Key);
+  async exportPrivateKey(key: CryptoKey): Promise<string> {
+    const exported = await this.crypto.exportKey('jwk', key);
+    return JSON.stringify(exported);
+  }
+
+  async importPublicKey(jwkString: string, type: 'ECDH' | 'ECDSA'): Promise<CryptoKey> {
+    const jwk = JSON.parse(jwkString);
     const algorithm = type === 'ECDH' 
       ? { name: 'ECDH', namedCurve: 'P-256' }
       : { name: 'ECDSA', namedCurve: 'P-256' };
     
     return await this.crypto.importKey(
-      'spki',
-      buffer,
+      'jwk',
+      jwk,
       algorithm,
       true,
       type === 'ECDH' ? [] : ['verify']
     );
   }
 
-  // --- KEY AGREEMENT & DERIVATION ---
-
-  async deriveSessionKey(privateKey: CryptoKey, publicKey: CryptoKey): Promise<CryptoKey> {
-    return await this.crypto.deriveKey(
-      { name: 'ECDH', public: publicKey },
-      privateKey,
-      { name: 'AES-GCM', length: 256 },
-      false, 
-      ['encrypt', 'decrypt']
+  async importPrivateKey(jwkString: string, type: 'ECDH' | 'ECDSA'): Promise<CryptoKey> {
+    const jwk = JSON.parse(jwkString);
+    const algorithm = type === 'ECDH' 
+      ? { name: 'ECDH', namedCurve: 'P-256' }
+      : { name: 'ECDSA', namedCurve: 'P-256' };
+    
+    return await this.crypto.importKey(
+      'jwk',
+      jwk,
+      algorithm,
+      true,
+      type === 'ECDH' ? ['deriveKey', 'deriveBits'] : ['sign']
     );
   }
 
-  // --- ENCRYPTION / DECRYPTION ---
+  async deriveSessionKey(privateKey: CryptoKey, publicKey: CryptoKey): Promise<CryptoKey> {
+    const sharedBits = await this.crypto.deriveBits(
+      { name: 'ECDH', public: publicKey },
+      privateKey,
+      256
+    );
+
+    const sharedSecretKey = await this.crypto.importKey(
+      'raw',
+      sharedBits,
+      { name: 'HKDF' },
+      false,
+      ['deriveKey']
+    );
+
+    return await this.crypto.deriveKey(
+      {
+        name: 'HKDF',
+        salt: new Uint8Array(16), 
+        info: new TextEncoder().encode('canall-v1-session'),
+        hash: 'SHA-256',
+      },
+      sharedSecretKey,
+      { name: 'AES-GCM', length: 256 },
+      false,
+      ['encrypt', 'decrypt']
+    );
+  }
 
   async encrypt(plaintext: string, key: CryptoKey): Promise<{ ciphertext: string; iv: string }> {
     const iv = this.cryptoObject.getRandomValues(new Uint8Array(12));
@@ -121,12 +137,11 @@ export class CryptoService {
     return new TextDecoder().decode(decrypted);
   }
 
-  // --- SIGNING ---
-
   async sign(data: string, privateKey: CryptoKey): Promise<string> {
+    // Sign the raw bytes of the ciphertext string
     const encoded = new TextEncoder().encode(data);
     const signature = await this.crypto.sign(
-      { name: 'ECDSA', hash: { name: 'SHA-256' } },
+      { name: 'ECDSA', hash: 'SHA-256' },
       privateKey,
       encoded
     );
@@ -138,44 +153,30 @@ export class CryptoService {
     const sigBuffer = this.base64ToArrayBuffer(signature);
     
     return await this.crypto.verify(
-      { name: 'ECDSA', hash: { name: 'SHA-256' } },
+      { name: 'ECDSA', hash: 'SHA-256' },
       publicKey,
-      encoded,
-      sigBuffer
+      sigBuffer,
+      encoded
     );
   }
 
-  // --- HELPERS ---
+  // --- COMPATIBILITY HELPERS ---
 
   private arrayBufferToBase64(buffer: ArrayBuffer): string {
-    if (typeof btoa !== 'undefined') {
-      let binary = '';
-      const bytes = new Uint8Array(buffer);
-      for (let i = 0; i < bytes.byteLength; i++) {
-        const byte = bytes[i];
-        if (byte !== undefined) {
-          binary += String.fromCharCode(byte);
-        }
-      }
-      return btoa(binary);
-    } else {
-      // @ts-ignore
-      return Buffer.from(buffer).toString('base64');
+    const bytes = new Uint8Array(buffer);
+    let binary = '';
+    for (let i = 0; i < bytes.byteLength; i++) {
+      binary += String.fromCharCode(bytes[i]!);
     }
+    return btoa(binary);
   }
 
   private base64ToArrayBuffer(base64: string): ArrayBuffer {
-    if (typeof atob !== 'undefined') {
-      const binary = atob(base64);
-      const bytes = new Uint8Array(binary.length);
-      for (let i = 0; i < binary.length; i++) {
-        bytes[i] = binary.charCodeAt(i);
-      }
-      return bytes.buffer;
-    } else {
-      // @ts-ignore
-      const buf = Buffer.from(base64, 'base64');
-      return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
+    const binary = atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) {
+      bytes[i] = binary.charCodeAt(i);
     }
+    return bytes.buffer;
   }
 }

@@ -4,16 +4,17 @@ export interface LocalIdentity {
   id?: number;
   userId: string;
   deviceId: string;
-  encryptionPrivateKey: CryptoKey;
-  encryptionPublicKey: CryptoKey;
-  signingPrivateKey: CryptoKey;
-  signingPublicKey: CryptoKey;
-  publicKeyBase64: string;
-  signatureKeyBase64: string;
+  encryptionPrivateKeyJWK: string;
+  encryptionPublicKeyJWK: string;
+  signingPrivateKeyJWK: string;
+  signingPublicKeyJWK: string;
+  publicKeyBase64: string; // The one we share with others
+  signatureKeyBase64: string; // The one we share with others
 }
 
 export interface Contact {
   userId: string;
+  nickname?: string;
   publicKey: string;
   signatureKey: string;
   lastSeen?: number;

@@ -3,26 +3,51 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 export interface MobileIdentity {
   userId: string;
   deviceId: string;
-  encryptionPrivateKey: any; // Serialized or handled by CryptoService
-  encryptionPublicKey: string;
-  signingPrivateKey: any;
-  signingPublicKey: string;
+  encryptionPrivateKeyJWK: string;
+  encryptionPublicKeyJWK: string;
+  signingPrivateKeyJWK: string;
+  signingPublicKeyJWK: string;
+  publicKeyBase64: string;
+  signatureKeyBase64: string;
+}
+
+export interface MobileContact {
+  userId: string;
+  nickname?: string;
+  publicKey: string;
+  signatureKey: string;
 }
 
 export const mobileDb = {
-  saveIdentity: async (identity: any) => {
+  saveIdentity: async (identity: MobileIdentity) => {
     await AsyncStorage.setItem('identity', JSON.stringify(identity));
   },
-  getIdentity: async () => {
+  getIdentity: async (): Promise<MobileIdentity | null> => {
     const data = await AsyncStorage.getItem('identity');
     return data ? JSON.parse(data) : null;
   },
-  saveContact: async (contact: any) => {
+  saveContact: async (contact: MobileContact) => {
     const contacts = await mobileDb.getContacts();
     contacts[contact.userId] = contact;
     await AsyncStorage.setItem('contacts', JSON.stringify(contacts));
   },
-  getContacts: async () => {
+  updateContact: async (userId: string, updates: Partial<MobileContact>) => {
+    const contacts = await mobileDb.getContacts();
+    if (contacts[userId]) {
+      contacts[userId] = { ...contacts[userId], ...updates };
+      await AsyncStorage.setItem('contacts', JSON.stringify(contacts));
+    }
+  },
+  deleteContact: async (userId: string) => {
+    const contacts = await mobileDb.getContacts();
+    delete contacts[userId];
+    await AsyncStorage.setItem('contacts', JSON.stringify(contacts));
+    // Also clear messages for this user
+    const messages = await mobileDb.getMessages();
+    const filtered = messages.filter((m: any) => m.senderId !== userId && m.targetUserId !== userId);
+    await AsyncStorage.setItem('messages', JSON.stringify(filtered));
+  },
+  getContacts: async (): Promise<Record<string, MobileContact>> => {
     const data = await AsyncStorage.getItem('contacts');
     return data ? JSON.parse(data) : {};
   },
@@ -35,5 +60,8 @@ export const mobileDb = {
   getMessages: async () => {
     const data = await AsyncStorage.getItem('messages');
     return data ? JSON.parse(data) : [];
+  },
+  clearAll: async () => {
+    await AsyncStorage.multiRemove(['identity', 'contacts', 'messages']);
   }
 };

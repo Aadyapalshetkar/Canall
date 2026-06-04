@@ -9,19 +9,27 @@ import {
   SafeAreaView, 
   KeyboardAvoidingView, 
   Platform,
-  ScrollView 
+  ScrollView,
+  Alert,
+  Clipboard
 } from 'react-native';
-import { Send, UserPlus, Shield } from 'lucide-react-native';
-import { CryptoService, WSFrame, RoutedMessagePayload } from 'shared';
-import { mobileDb } from './src/db/mobileStorage';
+import { Send, UserPlus, Shield, Circle, ChevronLeft, Trash2, Copy, Edit2 } from 'lucide-react-native';
+import { CryptoService, WSFrame, RoutedMessagePayload, FetchKeyResponsePayload } from 'shared';
+import { mobileDb, MobileIdentity, MobileContact } from './src/db/mobileStorage';
 import 'react-native-get-random-values';
+import { v4 as uuidv4 } from 'uuid';
 
 export default function App() {
-  const [identity, setIdentity] = useState<any>(null);
+  const [identity, setIdentity] = useState<MobileIdentity | null>(null);
+  const [sessionKeys, setSessionKeys] = useState<{encPrivate: CryptoKey, signPrivate: CryptoKey} | null>(null);
+  const [contacts, setContacts] = useState<Record<string, MobileContact>>({});
   const [messages, setMessages] = useState<any[]>([]);
   const [inputText, setInputText] = useState('');
   const [targetId, setTargetId] = useState('');
   const [activeChat, setActiveChat] = useState<string | null>(null);
+  const [isConnected, setIsConnected] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [showChat, setShowChat] = useState(false);
   
   const socketRef = useRef<WebSocket | null>(null);
   const cryptoService = useRef(new CryptoService());
@@ -30,74 +38,238 @@ export default function App() {
     init();
   }, []);
 
+  useEffect(() => {
+    if (identity && sessionKeys) {
+      connect();
+    }
+    return () => socketRef.current?.close();
+  }, [identity, sessionKeys]);
+
   const init = async () => {
     let id = await mobileDb.getIdentity();
-    if (!id) {
-      const userId = `mobile_${Math.random().toString(36).substring(7)}`;
+    if (id) {
+      try {
+        const encPrivate = await cryptoService.current.importPrivateKey(id.encryptionPrivateKeyJWK, 'ECDH');
+        const signPrivate = await cryptoService.current.importPrivateKey(id.signingPrivateKeyJWK, 'ECDSA');
+        setSessionKeys({ encPrivate, signPrivate });
+        setIdentity(id);
+      } catch (err) {
+        setError('Security context corrupted. Reset needed.');
+      }
+    } else {
       const { encryptionKeys, signingKeys } = await cryptoService.current.generateIdentityKeys();
-      
-      const pubEnc = await cryptoService.current.exportPublicKey(encryptionKeys.publicKey);
-      const pubSign = await cryptoService.current.exportPublicKey(signingKeys.publicKey);
+      const encPrivateJWK = await cryptoService.current.exportPrivateKey(encryptionKeys.privateKey);
+      const encPublicJWK = await cryptoService.current.exportPublicKey(encryptionKeys.publicKey);
+      const signPrivateJWK = await cryptoService.current.exportPrivateKey(signingKeys.privateKey);
+      const signPublicJWK = await cryptoService.current.exportPublicKey(signingKeys.publicKey);
 
-      id = {
-        userId,
+      const newId: MobileIdentity = {
+        userId: `mobile_${Math.random().toString(36).substring(7)}`,
         deviceId: 'mobile-device',
-        encryptionPublicKey: pubEnc,
-        signingPublicKey: pubSign,
-        _keys: { encryptionKeys, signingKeys }
+        encryptionPrivateKeyJWK: encPrivateJWK,
+        encryptionPublicKeyJWK: encPublicJWK,
+        signingPrivateKeyJWK: signPrivateJWK,
+        signingPublicKeyJWK: signPublicJWK,
+        publicKeyBase64: encPublicJWK,
+        signatureKeyBase64: signPublicJWK,
       };
-      await mobileDb.saveIdentity(id);
+      await mobileDb.saveIdentity(newId);
+      setSessionKeys({ encPrivate: encryptionKeys.privateKey, signPrivate: signingKeys.privateKey });
+      setIdentity(newId);
     }
-    setIdentity(id);
+    setContacts(await mobileDb.getContacts());
     setMessages(await mobileDb.getMessages());
-    connect(id);
   };
 
-  const connect = (id: any) => {
-    const ws = new WebSocket('ws://localhost:4000');
+  const connect = () => {
+    if (!identity) return;
+    const ws = new WebSocket('wss://canall-relay.onrender.com');
     socketRef.current = ws;
 
     ws.onopen = () => {
+      setIsConnected(true);
+      setError(null);
       ws.send(JSON.stringify({
         type: 'REGISTER',
         payload: {
-          userId: id.userId,
-          deviceId: id.deviceId,
-          publicKey: id.encryptionPublicKey,
-          signatureKey: id.signingPublicKey
+          userId: identity.userId,
+          deviceId: identity.deviceId,
+          publicKey: identity.publicKeyBase64,
+          signatureKey: identity.signatureKeyBase64
         }
       }));
     };
 
     ws.onmessage = async (e) => {
       const frame: WSFrame = JSON.parse(e.data);
-      // E2EE Incoming logic...
+      if (frame.type === 'FETCH_KEY_RESPONSE') {
+        const res = frame.payload as FetchKeyResponsePayload;
+        const newContact: MobileContact = {
+          userId: res.targetUserId,
+          publicKey: res.publicKey,
+          signatureKey: res.signatureKey,
+        };
+        await mobileDb.saveContact(newContact);
+        setContacts(await mobileDb.getContacts());
+      } else if (frame.type === 'ROUTED_MESSAGE') {
+        await handleIncomingMessage(frame.payload);
+      }
+    };
+
+    ws.onclose = () => {
+      setIsConnected(false);
+      setTimeout(connect, 3000);
     };
   };
 
-  const sendMessage = async () => {
-    if (!activeChat || !inputText) return;
-    // E2EE Encryption logic...
-    setInputText('');
+  const handleIncomingMessage = async (payload: RoutedMessagePayload) => {
+    if (!sessionKeys || !identity) return;
+    try {
+      let contactList = await mobileDb.getContacts();
+      let contact = contactList[payload.senderId];
+      
+      if (!contact) {
+        socketRef.current?.send(JSON.stringify({ type: 'FETCH_KEY', payload: { targetUserId: payload.senderId } }));
+        // Brief wait for keys
+        await new Promise(r => setTimeout(r, 1000));
+        contactList = await mobileDb.getContacts();
+        contact = contactList[payload.senderId];
+      }
+
+      if (!contact) throw new Error('Missing keys');
+
+      const senderEncKey = await cryptoService.current.importPublicKey(contact.publicKey, 'ECDH');
+      const senderSignKey = await cryptoService.current.importPublicKey(contact.signatureKey, 'ECDSA');
+
+      const isSigned = await cryptoService.current.verify(payload.ciphertext, payload.signature, senderSignKey);
+      if (!isSigned) throw new Error('Bad Signature');
+
+      const sessionKey = await cryptoService.current.deriveSessionKey(sessionKeys.encPrivate, senderEncKey);
+      const plaintext = await cryptoService.current.decrypt(payload.ciphertext, payload.iv, sessionKey);
+
+      const newMsg = {
+        id: payload.id,
+        senderId: payload.senderId,
+        targetUserId: identity.userId,
+        timestamp: payload.timestamp,
+        content: plaintext,
+        isMe: false,
+      };
+      const updatedMsgs = await mobileDb.saveMessage(newMsg);
+      setMessages(updatedMsgs);
+    } catch (err) {
+      console.error('Decryption failed', err);
+    }
   };
+
+  const sendMessage = async () => {
+    if (!activeChat || !inputText || !sessionKeys || !identity) return;
+    try {
+      const contact = contacts[activeChat];
+      if (!contact) return;
+
+      const targetEncKey = await cryptoService.current.importPublicKey(contact.publicKey, 'ECDH');
+      const sessionKey = await cryptoService.current.deriveSessionKey(sessionKeys.encPrivate, targetEncKey);
+      const { ciphertext, iv } = await cryptoService.current.encrypt(inputText, sessionKey);
+      const signature = await cryptoService.current.sign(ciphertext, sessionKeys.signPrivate);
+
+      const messageId = uuidv4();
+      const payload: RoutedMessagePayload = {
+        id: messageId,
+        senderId: identity.userId,
+        targetUserId: activeChat,
+        timestamp: Date.now(),
+        ciphertext,
+        iv,
+        signature,
+      };
+
+      socketRef.current?.send(JSON.stringify({ type: 'ROUTED_MESSAGE', payload }));
+      const newMsg = {
+        id: messageId,
+        senderId: identity.userId,
+        targetUserId: activeChat,
+        timestamp: payload.timestamp,
+        content: inputText,
+        isMe: true,
+      };
+      const updatedMsgs = await mobileDb.saveMessage(newMsg);
+      setMessages(updatedMsgs);
+      setInputText('');
+    } catch (err) {
+      setError('Failed to encrypt/send');
+    }
+  };
+
+  const handleAddContact = () => {
+    if (!targetId.trim()) return;
+    socketRef.current?.send(JSON.stringify({ type: 'FETCH_KEY', payload: { targetUserId: targetId.trim() } }));
+    setTargetId('');
+  };
+
+  const handleReset = () => {
+    Alert.alert('Reset Identity', 'Wipe all data and generate NEW identity?', [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Reset', onPress: async () => {
+          await mobileDb.clearAll();
+          init();
+        } 
+      }
+    ]);
+  };
+
+  if (!showChat) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <View style={styles.header}>
+          <Shield color="#007bff" size={28} />
+          <Text style={styles.title}>Canall</Text>
+          <Circle size={10} fill={isConnected ? '#28a745' : '#dc3545'} color="transparent" style={{ marginLeft: 'auto' }} />
+        </View>
+        <TouchableOpacity style={styles.idBox} onPress={() => { Clipboard.setString(identity?.userId || ''); Alert.alert('Copied ID'); }}>
+           <Text style={styles.idText}>My ID: {identity?.userId}</Text>
+           <Copy size={14} color="#666" />
+        </TouchableOpacity>
+
+        <View style={styles.contactBar}>
+          <TextInput 
+            style={styles.input} 
+            placeholder="User ID..." 
+            value={targetId}
+            onChangeText={setTargetId}
+          />
+          <TouchableOpacity style={styles.addButton} onPress={handleAddContact}>
+            <UserPlus color="#fff" size={20} />
+          </TouchableOpacity>
+        </View>
+
+        <ScrollView style={styles.chatArea}>
+          {Object.values(contacts).map((c) => (
+            <TouchableOpacity key={c.userId} style={styles.contactItem} onPress={() => { setActiveChat(c.userId); setShowChat(true); }}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.contactName}>{c.nickname || c.userId}</Text>
+                {c.nickname && <Text style={styles.contactId}>{c.userId}</Text>}
+              </View>
+              <TouchableOpacity onPress={() => mobileDb.deleteContact(c.userId).then(() => mobileDb.getContacts().then(setContacts))}>
+                <Trash2 size={18} color="#dc3545" />
+              </TouchableOpacity>
+            </TouchableOpacity>
+          ))}
+        </ScrollView>
+        <TouchableOpacity style={styles.resetBtn} onPress={handleReset}>
+          <Text style={{ color: '#666' }}>Reset My Identity</Text>
+        </TouchableOpacity>
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
-        <Shield color="#007bff" size={28} />
-        <Text style={styles.title}>Canall Mobile</Text>
-      </View>
-
-      <View style={styles.contactBar}>
-        <TextInput 
-          style={styles.input} 
-          placeholder="Contact User ID" 
-          value={targetId}
-          onChangeText={setTargetId}
-        />
-        <TouchableOpacity style={styles.addButton} onPress={() => setActiveChat(targetId)}>
-          <UserPlus color="#fff" size={20} />
+        <TouchableOpacity onPress={() => setShowChat(false)}>
+          <ChevronLeft color="#007bff" size={28} />
         </TouchableOpacity>
+        <Text style={styles.title}>{contacts[activeChat!]?.nickname || activeChat}</Text>
       </View>
 
       <ScrollView style={styles.chatArea}>
@@ -108,7 +280,7 @@ export default function App() {
         ))}
       </ScrollView>
 
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.inputAreaWrapper}>
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
         <View style={styles.inputArea}>
           <TextInput 
             style={styles.msgInput} 
@@ -126,18 +298,23 @@ export default function App() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#f5f5f5' },
+  container: { flex: 1, backgroundColor: '#fff' },
   header: { padding: 20, paddingTop: 50, flexDirection: 'row', alignItems: 'center', backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: '#eee' },
   title: { fontSize: 20, fontWeight: 'bold', marginLeft: 10 },
-  contactBar: { padding: 10, flexDirection: 'row', backgroundColor: '#fff', alignItems: 'center' },
-  input: { flex: 1, borderBottomWidth: 1, borderBottomColor: '#ccc', marginRight: 10, padding: 8 },
+  idBox: { margin: 15, padding: 10, backgroundColor: '#f8f9fa', borderRadius: 8, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  idText: { fontSize: 12, color: '#666' },
+  contactBar: { padding: 15, flexDirection: 'row', alignItems: 'center' },
+  input: { flex: 1, borderBottomWidth: 1, borderBottomColor: '#ccc', marginRight: 10, padding: 8, fontSize: 16 },
   addButton: { backgroundColor: '#007bff', padding: 12, borderRadius: 8 },
   chatArea: { flex: 1, padding: 10 },
-  inputAreaWrapper: { backgroundColor: '#fff' },
+  contactItem: { padding: 15, borderBottomWidth: 1, borderBottomColor: '#f9f9f9', flexDirection: 'row', alignItems: 'center' },
+  contactName: { fontWeight: 'bold', fontSize: 16 },
+  contactId: { fontSize: 12, color: '#888' },
   inputArea: { padding: 15, flexDirection: 'row', alignItems: 'center', borderTopWidth: 1, borderTopColor: '#eee' },
-  msgInput: { flex: 1, backgroundColor: '#f0f0f0', borderRadius: 25, paddingHorizontal: 20, paddingVertical: 12, marginRight: 10 },
+  msgInput: { flex: 1, backgroundColor: '#f0f0f0', borderRadius: 25, paddingHorizontal: 20, paddingVertical: 12, marginRight: 10, fontSize: 16 },
   sendButton: { backgroundColor: '#007bff', width: 50, height: 50, borderRadius: 25, justifyContent: 'center', alignItems: 'center' },
-  msgBox: { padding: 12, borderRadius: 15, marginVertical: 6, maxWidth: '80%' },
+  msgBox: { padding: 12, borderRadius: 15, marginVertical: 6, maxWidth: '85%' },
   myMsg: { alignSelf: 'flex-end', backgroundColor: '#007bff' },
-  theirMsg: { alignSelf: 'flex-start', backgroundColor: '#fff', borderWidth: 1, borderBottomColor: '#eee' }
+  theirMsg: { alignSelf: 'flex-start', backgroundColor: '#fff', borderWidth: 1, borderColor: '#eee' },
+  resetBtn: { padding: 20, alignItems: 'center', borderTopWidth: 1, borderTopColor: '#eee' }
 });
