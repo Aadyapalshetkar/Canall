@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: canall-relay
+    runtime: node
+    repo: https://github.com/Aadyapalshetkar/Canall
+    rootDir: apps/server
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    envVars:
+      - key: NODE_VERSION
+        value: 20.20.2
+      - key: PORT
+        value: 4000

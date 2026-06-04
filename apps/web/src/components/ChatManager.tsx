@@ -71,7 +71,8 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const connectToRelay = () => {
     if (!identity) return;
 
-    const ws = new WebSocket('ws://localhost:4000');
+    const relayUrl = import.meta.env.VITE_RELAY_URL || 'ws://localhost:4000';
+    const ws = new WebSocket(relayUrl);
     socketRef.current = ws;
 
     ws.onopen = () => {
