@@ -3,6 +3,8 @@ import { v4 as uuidv4 } from 'uuid';
 import { CryptoService, WSFrame, RoutedMessagePayload, FetchKeyResponsePayload } from 'shared';
 import { db, LocalIdentity, Contact, Message } from '../db/schema';
 
+import { useLiveQuery } from 'dexie-react-hooks';
+
 interface ChatContextType {
   identity: LocalIdentity | null;
   contacts: Contact[];
@@ -11,21 +13,24 @@ interface ChatContextType {
   sendMessage: (content: string) => Promise<void>;
   addContact: (userId: string) => Promise<void>;
   isConnected: boolean;
+  error: string | null;
+  setError: (error: string | null) => void;
 }
 
 const ChatContext = createContext<ChatContextType | undefined>(undefined);
 
 export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [identity, setIdentity] = useState<LocalIdentity | null>(null);
-  const [contacts, setContacts] = useState<Contact[]>([]);
   const [activeContact, setActiveContact] = useState<Contact | null>(null);
   const [isConnected, setIsConnected] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const socketRef = useRef<WebSocket | null>(null);
   const cryptoService = useRef(new CryptoService());
 
+  const contacts = useLiveQuery(() => db.contacts.toArray(), []) || [];
+
   useEffect(() => {
     initIdentity();
-    loadContacts();
   }, []);
 
   useEffect(() => {
@@ -63,11 +68,6 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  const loadContacts = async () => {
-    const allContacts = await db.contacts.toArray();
-    setContacts(allContacts);
-  };
-
   const connectToRelay = () => {
     if (!identity) return;
 
@@ -77,6 +77,7 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     ws.onopen = () => {
       setIsConnected(true);
+      setError(null);
       // Register with relay
       const registerFrame: WSFrame = {
         type: 'REGISTER',
@@ -95,7 +96,15 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
       handleIncomingFrame(frame);
     };
 
-    ws.onclose = () => setIsConnected(false);
+    ws.onclose = () => {
+      setIsConnected(false);
+      // Try to reconnect after 3 seconds
+      setTimeout(connectToRelay, 3000);
+    };
+
+    ws.onerror = () => {
+      setError('Connection failed. Server might be offline.');
+    };
   };
 
   const handleIncomingFrame = async (frame: WSFrame) => {
@@ -108,7 +117,6 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
           signatureKey: res.signatureKey,
         };
         await db.contacts.put(newContact);
-        loadContacts();
         break;
 
       case 'ROUTED_MESSAGE':
@@ -116,7 +124,7 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
         break;
       
       case 'ERROR':
-        console.error('Relay Error:', frame.payload.message);
+        setError(frame.payload.message);
         break;
     }
   };
@@ -137,7 +145,6 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }));
         
         // Wait briefly for the FETCH_KEY_RESPONSE to update the DB
-        // In a production app, we would queue this message processing
         let attempts = 0;
         while (!contact && attempts < 10) {
           await new Promise(r => setTimeout(r, 200));
@@ -232,9 +239,10 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const addContact = async (userId: string) => {
     if (!socketRef.current) return;
+    setError(null);
     socketRef.current.send(JSON.stringify({
       type: 'FETCH_KEY',
-      payload: { targetUserId: userId }
+      payload: { targetUserId: userId.trim() }
     }));
   };
 
@@ -246,7 +254,9 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setActiveContact, 
       sendMessage, 
       addContact,
-      isConnected 
+      isConnected,
+      error,
+      setError
     }}>
       {children}
     </ChatContext.Provider>

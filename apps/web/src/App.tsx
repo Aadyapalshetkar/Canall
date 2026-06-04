@@ -5,7 +5,7 @@ import { db } from './db/schema';
 import { Send, UserPlus, Shield, Circle } from 'lucide-react';
 
 const Sidebar: React.FC = () => {
-  const { identity, contacts, setActiveContact, activeContact, addContact, isConnected } = useChat();
+  const { identity, contacts, setActiveContact, activeContact, addContact, isConnected, error } = useChat();
   const [newContactId, setNewContactId] = useState('');
 
   return (
@@ -25,6 +25,12 @@ const Sidebar: React.FC = () => {
             placeholder="Add User ID..." 
             value={newContactId}
             onChange={(e) => setNewContactId(e.target.value)}
+            onKeyPress={(e) => {
+              if (e.key === 'Enter') {
+                addContact(newContactId);
+                setNewContactId('');
+              }
+            }}
             style={{ flex: 1, padding: '8px', borderRadius: '4px', border: '1px solid #ccc' }}
           />
           <button 
@@ -34,6 +40,7 @@ const Sidebar: React.FC = () => {
             <UserPlus size={18} />
           </button>
         </div>
+        {error && <div style={{ color: '#dc3545', fontSize: '0.75rem', marginTop: '8px' }}>{error}</div>}
       </div>
 
       <div style={{ flex: 1, overflowY: 'auto' }}>
