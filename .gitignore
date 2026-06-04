@@ -1,0 +1,8 @@
+node_modules
+dist
+.env
+.expo
+android/app/build
+ios/Pods
+*.log
+.DS_Store
