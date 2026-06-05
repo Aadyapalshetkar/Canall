@@ -97,9 +97,9 @@ export default function App() {
       }
       setContacts(await mobileDb.getContacts());
       setMessages(await mobileDb.getMessages());
-    } catch (err) {
+    } catch (err: any) {
       console.error('App init failed', err);
-      setError('Initialization failed. Check permissions.');
+      setError(`Init Error: ${err.message || 'Unknown'}`);
     }
   };
 
