@@ -13,15 +13,6 @@ import {
   Alert
 } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
-import * as Notifications from 'expo-notifications';
-
-Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowAlert: true,
-    shouldPlaySound: true,
-    shouldSetBadge: false,
-  }),
-});
 import { Send, UserPlus, Shield, Circle, ChevronLeft, Trash2, Copy, Edit2 } from 'lucide-react-native';
 import { CryptoService } from './src/shared/CryptoService';
 import { WSFrame, RoutedMessagePayload, FetchKeyResponsePayload } from './src/shared/types';
@@ -57,11 +48,6 @@ export default function App() {
   const init = async () => {
     try {
       cryptoService.current = new CryptoService();
-      
-      const { status } = await Notifications.requestPermissionsAsync();
-      if (status !== 'granted') {
-        console.warn('Notification permission not granted');
-      }
 
       let id = await mobileDb.getIdentity();
       if (id) {
@@ -182,18 +168,6 @@ export default function App() {
       };
       const updatedMsgs = await mobileDb.saveMessage(newMsg);
       setMessages(updatedMsgs);
-
-      // Show notification if app is in background or not in this chat
-      if (!showChat || activeChat !== payload.senderId) {
-        await Notifications.scheduleNotificationAsync({
-          content: {
-            title: contact.nickname || payload.senderId,
-            body: plaintext,
-            data: { senderId: payload.senderId },
-          },
-          trigger: null, // immediate
-        });
-      }
     } catch (err) {
       console.error('Decryption failed', err);
     }
