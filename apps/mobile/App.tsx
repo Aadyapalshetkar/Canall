@@ -17,7 +17,14 @@ import { Send, UserPlus, Shield, Circle, ChevronLeft, Trash2, Copy, Edit2 } from
 import { CryptoService } from './src/shared/CryptoService';
 import { WSFrame, RoutedMessagePayload, FetchKeyResponsePayload } from './src/shared/types';
 import { mobileDb, MobileIdentity, MobileContact } from './src/db/mobileStorage';
-import { v4 as uuidv4 } from 'uuid';
+import * as Crypto from 'expo-crypto';
+
+// Safe UUID implementation using Expo's native random generator
+function uuidv4() {
+  return '10000000-1000-4000-8000-100000000000'.replace(/[018]/g, (c: any) =>
+    (c ^ Crypto.getRandomBytes(1)[0] & 15 >> c / 4).toString(16)
+  );
+}
 
 export default function App() {
   const [identity, setIdentity] = useState<MobileIdentity | null>(null);

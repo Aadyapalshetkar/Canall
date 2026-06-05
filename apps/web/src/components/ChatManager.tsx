@@ -48,6 +48,17 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return () => socketRef.current?.close();
   }, [session]);
 
+  useEffect(() => {
+    if (window.electronAPI) {
+      window.electronAPI.onNotificationClick(() => {
+        // In a real app, we might want to store which user sent the message
+        // and switch to that contact. For now, we just ensure the app is visible
+        // which is already handled in the main process.
+        console.log('Notification clicked');
+      });
+    }
+  }, []);
+
   const initIdentity = async () => {
     const existing = await db.identities.toCollection().first();
     if (existing) {
@@ -173,6 +184,19 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
         isMe: false,
         status: 'delivered',
       });
+
+      // Trigger Notification
+      if (window.electronAPI) {
+        const isAppFocused = document.hasFocus();
+        const isActiveContact = activeContact?.userId === payload.senderId;
+        
+        if (!isAppFocused || !isActiveContact) {
+          window.electronAPI.showNotification(
+            contact.nickname || contact.userId,
+            plaintext.length > 50 ? plaintext.substring(0, 47) + '...' : plaintext
+          );
+        }
+      }
 
       socketRef.current?.send(JSON.stringify({ type: 'DELIVERY_ACK', payload: { messageId: payload.id, recipientId: session.data.userId } }));
     } catch (err: any) {

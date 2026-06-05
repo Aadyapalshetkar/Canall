@@ -62,6 +62,8 @@ export const mobileDb = {
     return data ? JSON.parse(data) : [];
   },
   clearAll: async () => {
-    await AsyncStorage.multiRemove(['identity', 'contacts', 'messages']);
+    await AsyncStorage.removeItem('identity');
+    await AsyncStorage.removeItem('contacts');
+    await AsyncStorage.removeItem('messages');
   }
 };

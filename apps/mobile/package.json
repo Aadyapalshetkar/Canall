@@ -13,12 +13,12 @@
     "lucide-react-native": "^1.17.0",
     "react": "19.2.3",
     "react-native": "0.85.3",
-    "react-native-get-random-values": "^2.0.0",
-    "react-native-quick-crypto": "^1.1.5",
     "text-encoding": "^0.7.0",
     "uuid": "^14.0.0"
   },
   "devDependencies": {
+    "@types/base-64": "^1.0.2",
+    "@types/node": "^25.9.1",
     "@types/react": "~19.2.2",
     "typescript": "~6.0.3"
   },
