@@ -10,14 +10,13 @@ import {
   KeyboardAvoidingView, 
   Platform,
   ScrollView,
-  Alert,
-  Clipboard
+  Alert
 } from 'react-native';
+import * as Clipboard from 'expo-clipboard';
 import { Send, UserPlus, Shield, Circle, ChevronLeft, Trash2, Copy, Edit2 } from 'lucide-react-native';
 import { CryptoService } from './src/shared/CryptoService';
 import { WSFrame, RoutedMessagePayload, FetchKeyResponsePayload } from './src/shared/types';
 import { mobileDb, MobileIdentity, MobileContact } from './src/db/mobileStorage';
-import 'react-native-get-random-values';
 import { v4 as uuidv4 } from 'uuid';
 
 export default function App() {
@@ -33,53 +32,61 @@ export default function App() {
   const [showChat, setShowChat] = useState(false);
   
   const socketRef = useRef<WebSocket | null>(null);
-  const cryptoService = useRef(new CryptoService());
+  const cryptoService = useRef<CryptoService | null>(null);
 
   useEffect(() => {
     init();
+    return () => socketRef.current?.close();
   }, []);
 
   useEffect(() => {
     if (identity && sessionKeys) {
       connect();
     }
-    return () => socketRef.current?.close();
   }, [identity, sessionKeys]);
 
   const init = async () => {
-    let id = await mobileDb.getIdentity();
-    if (id) {
-      try {
-        const encPrivate = await cryptoService.current.importPrivateKey(id.encryptionPrivateKeyJWK, 'ECDH');
-        const signPrivate = await cryptoService.current.importPrivateKey(id.signingPrivateKeyJWK, 'ECDSA');
-        setSessionKeys({ encPrivate, signPrivate });
-        setIdentity(id);
-      } catch (err) {
-        setError('Security context corrupted. Reset needed.');
-      }
-    } else {
-      const { encryptionKeys, signingKeys } = await cryptoService.current.generateIdentityKeys();
-      const encPrivateJWK = await cryptoService.current.exportPrivateKey(encryptionKeys.privateKey);
-      const encPublicJWK = await cryptoService.current.exportPublicKey(encryptionKeys.publicKey);
-      const signPrivateJWK = await cryptoService.current.exportPrivateKey(signingKeys.privateKey);
-      const signPublicJWK = await cryptoService.current.exportPublicKey(signingKeys.publicKey);
+    try {
+      cryptoService.current = new CryptoService();
+      
+      let id = await mobileDb.getIdentity();
+      if (id) {
+        try {
+          const encPrivate = await cryptoService.current.importPrivateKey(id.encryptionPrivateKeyJWK, 'ECDH');
+          const signPrivate = await cryptoService.current.importPrivateKey(id.signingPrivateKeyJWK, 'ECDSA');
+          setSessionKeys({ encPrivate, signPrivate });
+          setIdentity(id);
+        } catch (err) {
+          console.error('Keys import failed', err);
+          setError('Security context corrupted. Reset needed.');
+        }
+      } else {
+        const { encryptionKeys, signingKeys } = await cryptoService.current.generateIdentityKeys();
+        const encPrivateJWK = await cryptoService.current.exportPrivateKey(encryptionKeys.privateKey);
+        const encPublicJWK = await cryptoService.current.exportPublicKey(encryptionKeys.publicKey);
+        const signPrivateJWK = await cryptoService.current.exportPrivateKey(signingKeys.privateKey);
+        const signPublicJWK = await cryptoService.current.exportPublicKey(signingKeys.publicKey);
 
-      const newId: MobileIdentity = {
-        userId: `mobile_${Math.random().toString(36).substring(7)}`,
-        deviceId: 'mobile-device',
-        encryptionPrivateKeyJWK: encPrivateJWK,
-        encryptionPublicKeyJWK: encPublicJWK,
-        signingPrivateKeyJWK: signPrivateJWK,
-        signingPublicKeyJWK: signPublicJWK,
-        publicKeyBase64: encPublicJWK,
-        signatureKeyBase64: signPublicJWK,
-      };
-      await mobileDb.saveIdentity(newId);
-      setSessionKeys({ encPrivate: encryptionKeys.privateKey, signPrivate: signingKeys.privateKey });
-      setIdentity(newId);
+        const newId: MobileIdentity = {
+          userId: `mobile_${Math.random().toString(36).substring(7)}`,
+          deviceId: 'mobile-device',
+          encryptionPrivateKeyJWK: encPrivateJWK,
+          encryptionPublicKeyJWK: encPublicJWK,
+          signingPrivateKeyJWK: signPrivateJWK,
+          signingPublicKeyJWK: signPublicJWK,
+          publicKeyBase64: encPublicJWK,
+          signatureKeyBase64: signPublicJWK,
+        };
+        await mobileDb.saveIdentity(newId);
+        setSessionKeys({ encPrivate: encryptionKeys.privateKey, signPrivate: signingKeys.privateKey });
+        setIdentity(newId);
+      }
+      setContacts(await mobileDb.getContacts());
+      setMessages(await mobileDb.getMessages());
+    } catch (err) {
+      console.error('App init failed', err);
+      setError('Initialization failed. Check permissions.');
     }
-    setContacts(await mobileDb.getContacts());
-    setMessages(await mobileDb.getMessages());
   };
 
   const connect = () => {
@@ -102,18 +109,22 @@ export default function App() {
     };
 
     ws.onmessage = async (e) => {
-      const frame: WSFrame = JSON.parse(e.data);
-      if (frame.type === 'FETCH_KEY_RESPONSE') {
-        const res = frame.payload as FetchKeyResponsePayload;
-        const newContact: MobileContact = {
-          userId: res.targetUserId,
-          publicKey: res.publicKey,
-          signatureKey: res.signatureKey,
-        };
-        await mobileDb.saveContact(newContact);
-        setContacts(await mobileDb.getContacts());
-      } else if (frame.type === 'ROUTED_MESSAGE') {
-        await handleIncomingMessage(frame.payload);
+      try {
+        const frame: WSFrame = JSON.parse(e.data);
+        if (frame.type === 'FETCH_KEY_RESPONSE') {
+          const res = frame.payload as FetchKeyResponsePayload;
+          const newContact: MobileContact = {
+            userId: res.targetUserId,
+            publicKey: res.publicKey,
+            signatureKey: res.signatureKey,
+          };
+          await mobileDb.saveContact(newContact);
+          setContacts(await mobileDb.getContacts());
+        } else if (frame.type === 'ROUTED_MESSAGE') {
+          await handleIncomingMessage(frame.payload);
+        }
+      } catch (err) {
+        console.error('Message parsing failed', err);
       }
     };
 
@@ -124,15 +135,14 @@ export default function App() {
   };
 
   const handleIncomingMessage = async (payload: RoutedMessagePayload) => {
-    if (!sessionKeys || !identity) return;
+    if (!sessionKeys || !identity || !cryptoService.current) return;
     try {
       let contactList = await mobileDb.getContacts();
       let contact = contactList[payload.senderId];
       
       if (!contact) {
         socketRef.current?.send(JSON.stringify({ type: 'FETCH_KEY', payload: { targetUserId: payload.senderId } }));
-        // Brief wait for keys
-        await new Promise(r => setTimeout(r, 1000));
+        await new Promise(r => setTimeout(r, 1500));
         contactList = await mobileDb.getContacts();
         contact = contactList[payload.senderId];
       }
@@ -164,7 +174,7 @@ export default function App() {
   };
 
   const sendMessage = async () => {
-    if (!activeChat || !inputText || !sessionKeys || !identity) return;
+    if (!activeChat || !inputText || !sessionKeys || !identity || !cryptoService.current) return;
     try {
       const contact = contacts[activeChat];
       if (!contact) return;
@@ -198,6 +208,7 @@ export default function App() {
       setMessages(updatedMsgs);
       setInputText('');
     } catch (err) {
+      console.error('Send failed', err);
       setError('Failed to encrypt/send');
     }
   };
@@ -213,6 +224,10 @@ export default function App() {
       { text: 'Cancel', style: 'cancel' },
       { text: 'Reset', onPress: async () => {
           await mobileDb.clearAll();
+          setIdentity(null);
+          setSessionKeys(null);
+          setMessages([]);
+          setContacts({});
           init();
         } 
       }
@@ -227,10 +242,15 @@ export default function App() {
           <Text style={styles.title}>Canall</Text>
           <Circle size={10} fill={isConnected ? '#28a745' : '#dc3545'} color="transparent" style={{ marginLeft: 'auto' }} />
         </View>
-        <TouchableOpacity style={styles.idBox} onPress={() => { Clipboard.setString(identity?.userId || ''); Alert.alert('Copied ID'); }}>
+        <TouchableOpacity style={styles.idBox} onPress={async () => { 
+          await Clipboard.setStringAsync(identity?.userId || ''); 
+          Alert.alert('Success', 'ID copied to clipboard'); 
+        }}>
            <Text style={styles.idText}>My ID: {identity?.userId}</Text>
            <Copy size={14} color="#666" />
         </TouchableOpacity>
+
+        {error && <Text style={styles.errorText}>{error}</Text>}
 
         <View style={styles.contactBar}>
           <TextInput 
@@ -317,5 +337,6 @@ const styles = StyleSheet.create({
   msgBox: { padding: 12, borderRadius: 15, marginVertical: 6, maxWidth: '85%' },
   myMsg: { alignSelf: 'flex-end', backgroundColor: '#007bff' },
   theirMsg: { alignSelf: 'flex-start', backgroundColor: '#fff', borderWidth: 1, borderColor: '#eee' },
-  resetBtn: { padding: 20, alignItems: 'center', borderTopWidth: 1, borderTopColor: '#eee' }
+  resetBtn: { padding: 20, alignItems: 'center', borderTopWidth: 1, borderTopColor: '#eee' },
+  errorText: { color: '#dc3545', marginHorizontal: 15, fontSize: 12 }
 });
