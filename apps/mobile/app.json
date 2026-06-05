@@ -18,15 +18,6 @@
       },
       "permissions": ["NOTIFICATIONS"]
     },
-    "plugins": [
-      [
-        "expo-notifications",
-        {
-          "icon": "./assets/icon.png",
-          "color": "#007bff"
-        }
-      ]
-    ],
     "web": {
       "favicon": "./assets/favicon.png"
     },
