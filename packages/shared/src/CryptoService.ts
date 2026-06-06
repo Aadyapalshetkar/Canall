@@ -7,9 +7,13 @@ export class CryptoService {
   private crypto: SubtleCrypto;
   private cryptoObject: Crypto;
 
-  constructor() {
-    // Standardize across Browser (window.crypto), Node 20+ (globalThis.crypto), and Mobile (global.crypto)
-    const cryptoInstance = (typeof window !== 'undefined' ? window.crypto : globalThis.crypto);
+  constructor(injectedCrypto?: any) {
+    // 1. Dependency Injection (Highest Priority)
+    // 2. Node 20+ / React Native Environment (globalThis)
+    // 3. Browser Environment (window)
+    const cryptoInstance = injectedCrypto || 
+                           (typeof globalThis !== 'undefined' ? globalThis.crypto : null) || 
+                           (typeof window !== 'undefined' ? window.crypto : null);
     
     if (!cryptoInstance || !cryptoInstance.subtle) {
       throw new Error('Web Crypto API (SubtleCrypto) not found in this environment');

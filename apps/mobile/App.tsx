@@ -17,12 +17,21 @@ import { Send, UserPlus, Shield, Circle, ChevronLeft, Trash2, Copy, Edit2 } from
 import { CryptoService } from './src/shared/CryptoService';
 import { WSFrame, RoutedMessagePayload, FetchKeyResponsePayload } from './src/shared/types';
 import { mobileDb, MobileIdentity, MobileContact } from './src/db/mobileStorage';
-import * as Crypto from 'expo-crypto';
+import * as ExpoCrypto from 'expo-crypto';
+// @ts-ignore
+import isoCrypto from 'isomorphic-webcrypto';
+
+// Polyfill isomorphic-webcrypto's random generator with Expo's secure hardware generator
+isoCrypto.getRandomValues = (buffer: any) => {
+  const bytes = ExpoCrypto.getRandomBytes(buffer.length);
+  buffer.set(bytes);
+  return buffer;
+};
 
 // Safe UUID implementation using Expo's native random generator
 function uuidv4() {
   return '10000000-1000-4000-8000-100000000000'.replace(/[018]/g, (c: any) =>
-    (c ^ Crypto.getRandomBytes(1)[0] & 15 >> c / 4).toString(16)
+    (c ^ ExpoCrypto.getRandomBytes(1)[0] & 15 >> c / 4).toString(16)
   );
 }
 
@@ -54,7 +63,7 @@ export default function App() {
 
   const init = async () => {
     try {
-      cryptoService.current = new CryptoService();
+      cryptoService.current = new CryptoService(isoCrypto);
 
       let id = await mobileDb.getIdentity();
       if (id) {

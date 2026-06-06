@@ -7,10 +7,10 @@ export class CryptoService {
   private crypto: SubtleCrypto;
   private cryptoObject: any;
 
-  constructor() {
-    // Rely exclusively on the global object, which is now robustly polyfilled in mobile/polyfills.ts
-    // or naturally available in Browsers and Node 20+.
-    const globalCrypto = typeof window !== 'undefined' ? window.crypto : globalThis.crypto;
+  constructor(injectedCrypto?: any) {
+    const globalCrypto = injectedCrypto || 
+                         (typeof globalThis !== 'undefined' ? globalThis.crypto : null) ||
+                         (typeof window !== 'undefined' ? window.crypto : null);
     
     if (!globalCrypto || !globalCrypto.subtle) {
       throw new Error('WebCrypto API not found');
