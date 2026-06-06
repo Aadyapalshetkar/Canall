@@ -9,13 +9,5 @@ if (!global.atob) {
     global.atob = decode;
 }
 
-// @ts-ignore
-import crypto from 'isomorphic-webcrypto';
-
-if (!global.crypto) {
-    // @ts-ignore
-    global.crypto = crypto;
-} else if (!global.crypto.subtle) {
-    // @ts-ignore
-    global.crypto.subtle = crypto.subtle;
-}
+// We rely on Dependency Injection in App.tsx instead of aggressively overwriting global.crypto,
+// which is known to cause native panics/crashes on some Android devices.
