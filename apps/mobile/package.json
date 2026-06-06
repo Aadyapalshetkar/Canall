@@ -10,6 +10,7 @@
     "expo-crypto": "^56.0.4",
     "expo-status-bar": "~56.0.4",
     "expo-web-browser": "^56.0.5",
+    "isomorphic-webcrypto": "^2.3.8",
     "lucide-react-native": "^1.17.0",
     "react": "19.2.3",
     "react-native": "0.85.3",

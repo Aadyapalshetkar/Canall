@@ -8,26 +8,16 @@ export class CryptoService {
   private cryptoObject: any;
 
   constructor() {
-    // 1. Prioritize Expo Crypto on Mobile
-    // @ts-ignore
-    if (typeof expo !== 'undefined' && global.expo?.crypto?.subtle) {
-      // @ts-ignore
-      this.cryptoObject = global.expo.crypto;
-      // @ts-ignore
-      this.crypto = global.expo.crypto.subtle;
-    } 
-    // 2. Browser Environment
-    else if (typeof window !== 'undefined' && window.crypto?.subtle) {
-      this.cryptoObject = window.crypto;
-      this.crypto = window.crypto.subtle;
-    } 
-    // 3. Fallback to global crypto
-    else {
-      const globalCrypto = globalThis.crypto;
-      if (!globalCrypto || !globalCrypto.subtle) throw new Error('WebCrypto API not found');
-      this.cryptoObject = globalCrypto;
-      this.crypto = globalCrypto.subtle;
+    // Rely exclusively on the global object, which is now robustly polyfilled in mobile/polyfills.ts
+    // or naturally available in Browsers and Node 20+.
+    const globalCrypto = typeof window !== 'undefined' ? window.crypto : globalThis.crypto;
+    
+    if (!globalCrypto || !globalCrypto.subtle) {
+      throw new Error('WebCrypto API not found');
     }
+    
+    this.cryptoObject = globalCrypto;
+    this.crypto = globalCrypto.subtle;
   }
 
   async generateIdentityKeys() {
